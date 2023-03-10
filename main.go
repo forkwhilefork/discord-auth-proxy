@@ -5,15 +5,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 
 	"github.com/gorilla/sessions"
 	"github.com/ravener/discord-oauth2"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
 
@@ -26,29 +29,50 @@ type Guild struct {
 	Features    []string
 }
 
+var (
+	listenAddr           = flag.String("listen.addr", "0.0.0.0", "HTTP listen address")
+	listenPort           = flag.Int("listen.port", 3000, "HTTP listen port")
+	discordClientId      = flag.String("discord.clientId", "", "Discord client ID")
+	discordClientSecret  = flag.String("discord.clientSecret", "", "Discord client secret")
+	discordRequiredGuild = flag.String("discord.requiredGuild", "", "Discord guild that user must be in")
+	cookieStoreKey       = flag.String("cookieStore.key", "", "key for the cookie store")
+	proxyTarget          = flag.String("proxy.target", "", "target URL to proxy to")
+	oauthRedirectUrl     = flag.String("oauth.redirectUrl", "", "OAuth redirect URL")
+)
+
 // This is the state key used for security, sent in login, validated in callback.
 // For this example we keep it simple and hardcode a string
 // but in real apps you must provide a proper function that generates a state.
 var state = "random"
 
+var log *logrus.Logger
+
 func main() {
+	flag.Parse()
+
+	log = logrus.New()
+
+	if *discordClientId == "" || *discordClientSecret == "" || *discordRequiredGuild == "" ||
+		*cookieStoreKey == "" || *proxyTarget == "" || *oauthRedirectUrl == "" {
+		log.Fatal("Must specify arguments")
+	}
+
 	// Create a config.
 	// Ensure you add the redirect url in the application's oauth2 settings
 	// in the discord devs page.
 	conf := &oauth2.Config{
-		RedirectURL: "https://alpha.booktags.app/.proxy/auth/callback",
-		// This next 2 lines must be edited before running this.
-		ClientID:     "825495973349687336",
-		ClientSecret: "SSGWwWas0laGExnPZlWRiFEWqPvthDtq",
+		RedirectURL:  *oauthRedirectUrl,
+		ClientID:     *discordClientId,
+		ClientSecret: *discordClientSecret,
 		Scopes:       []string{discord.ScopeGuilds},
 		Endpoint:     discord.Endpoint,
 	}
 
 	// where we are reverse-proxying to
-	u, _ := url.Parse("http://127.0.0.1:8080/")
+	u, _ := url.Parse(*proxyTarget)
 
-	// setting up the cookie store
-	key := []byte("Xp2s5u8x/A?D(G+KbPeShVmYq3t6w9y$")
+	// set up the cookie store
+	key := []byte(*cookieStoreKey)
 	store := sessions.NewCookieStore(key)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +108,7 @@ func main() {
 		}
 		// Step 3: We exchange the code we got for an access token
 		// Then we can use the access token to do actions, limited to scopes we requested
-		token, err := conf.Exchange(oauth2.NoContext, r.FormValue("code"))
+		token, err := conf.Exchange(context.Background(), r.FormValue("code"))
 
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -93,10 +117,8 @@ func main() {
 			return
 		}
 
-		// Step 4: Use the access token, here we use it to get the logged in user's guilds.
-		res, err := conf.Client(oauth2.NoContext, token).Get("https://discordapp.com/api/v6/users/@me/guilds")
-
-		// tagcat: 546465182344413185
+		// Step 4: Use the access token. Here we use it to get the logged in user's guilds.
+		res, err := conf.Client(context.Background(), token).Get("https://discordapp.com/api/v6/users/@me/guilds")
 
 		if err != nil || res.StatusCode != 200 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -118,16 +140,14 @@ func main() {
 			return
 		}
 
-		// check if the user is a member of the guild we care about
-		requiredGuild := "546465182344413185"
-
+		// Step 5: Check if the user is a member of the guild we care about
 		var guilds []Guild
 
 		json.Unmarshal([]byte(guildJson), &guilds)
 
 		session.Values["authenticated"] = false
 		for _, guild := range guilds {
-			if guild.Id == requiredGuild {
+			if guild.Id == *discordRequiredGuild {
 				// user is authenticated
 				session.Values["authenticated"] = true
 				break
@@ -144,6 +164,7 @@ func main() {
 		}
 	})
 
-	log.Println("Listening on :3000")
-	log.Fatal(http.ListenAndServe("0.0.0.0:3000", nil))
+	log.Infof("Listening on %s:%d", *listenAddr, *listenPort)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf("%s:%d", *listenAddr, *listenPort), nil))
+
 }
