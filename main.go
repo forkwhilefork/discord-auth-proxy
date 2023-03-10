@@ -5,24 +5,25 @@
 package main
 
 import (
-  "encoding/json"
-	"github.com/ravener/discord-oauth2"
-	"golang.org/x/oauth2"
-  "github.com/gorilla/sessions"
+	"encoding/json"
 	"io/ioutil"
 	"log"
 	"net/http"
-  "net/http/httputil"
-  "net/url"
+	"net/http/httputil"
+	"net/url"
+
+	"github.com/gorilla/sessions"
+	"github.com/ravener/discord-oauth2"
+	"golang.org/x/oauth2"
 )
 
 type Guild struct {
-  Id string
-  Name string
-  Icon string
-  Owner bool
-  Permissions string
-  Features []string
+	Id          string
+	Name        string
+	Icon        string
+	Owner       bool
+	Permissions string
+	Features    []string
 }
 
 // This is the state key used for security, sent in login, validated in callback.
@@ -42,39 +43,39 @@ func main() {
 		Scopes:       []string{discord.ScopeGuilds},
 		Endpoint:     discord.Endpoint,
 	}
-  
-  // where we are reverse-proxying to
-  u, _ := url.Parse("http://127.0.0.1:8080/")
-  
-  // setting up the cookie store
-  key := []byte("Xp2s5u8x/A?D(G+KbPeShVmYq3t6w9y$")
-  store := sessions.NewCookieStore(key)
-  
+
+	// where we are reverse-proxying to
+	u, _ := url.Parse("http://127.0.0.1:8080/")
+
+	// setting up the cookie store
+	key := []byte("Xp2s5u8x/A?D(G+KbPeShVmYq3t6w9y$")
+	store := sessions.NewCookieStore(key)
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    session, _ := store.Get(r, "login")
-    
-    // Check if user is authenticated
-    if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
-      // Step 1: Redirect to the OAuth 2.0 Authorization page.
-      http.Redirect(w, r, conf.AuthCodeURL(state), http.StatusTemporaryRedirect)
+		session, _ := store.Get(r, "login")
+
+		// Check if user is authenticated
+		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
+			// Step 1: Redirect to the OAuth 2.0 Authorization page.
+			http.Redirect(w, r, conf.AuthCodeURL(state), http.StatusTemporaryRedirect)
 		} else {
-      httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
+			httputil.NewSingleHostReverseProxy(u).ServeHTTP(w, r)
 		}
 	})
-	
-  http.HandleFunc("/.proxy/logout", func(w http.ResponseWriter, r *http.Request) {
-    session, _ := store.Get(r, "login")
-    
+
+	http.HandleFunc("/.proxy/logout", func(w http.ResponseWriter, r *http.Request) {
+		session, _ := store.Get(r, "login")
+
 		session.Values["authenticated"] = false
-    session.Save(r, w)
-    w.Write([]byte("logged out"))
+		session.Save(r, w)
+		w.Write([]byte("logged out"))
 	})
 
 	// Step 2: After user authenticates their accounts this callback is fired.
 	// the state we sent in login is also sent back to us here
 	// we have to verify it as necessary before continuing.
 	http.HandleFunc("/.proxy/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-    session, _ := store.Get(r, "login")
+		session, _ := store.Get(r, "login")
 		if r.FormValue("state") != state {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("State does not match."))
@@ -91,12 +92,12 @@ func main() {
 			session.Values["authenticated"] = false
 			return
 		}
-		
+
 		// Step 4: Use the access token, here we use it to get the logged in user's guilds.
 		res, err := conf.Client(oauth2.NoContext, token).Get("https://discordapp.com/api/v6/users/@me/guilds")
-    
-    // tagcat: 546465182344413185
-    
+
+		// tagcat: 546465182344413185
+
 		if err != nil || res.StatusCode != 200 {
 			w.WriteHeader(http.StatusInternalServerError)
 			session.Values["authenticated"] = false
@@ -107,40 +108,40 @@ func main() {
 			}
 			return
 		}
-    
+
 		guildJson, err := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-    
+
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 			return
 		}
-    
-    // check if the user is a member of the guild we care about
-    requiredGuild := "546465182344413185"
-    
-    var guilds []Guild
-    
-    json.Unmarshal([]byte(guildJson), &guilds)
-    
-    session.Values["authenticated"] = false
-    for _, guild := range guilds {
-      if guild.Id == requiredGuild {
-          // user is authenticated
-          session.Values["authenticated"] = true
-          break
-      }
-    }
-    
-    session.Save(r, w)
-    
-    if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
-      w.Write([]byte("not authorized"))
-    } else {
-      // redirect to "/"
-      http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-    }
+
+		// check if the user is a member of the guild we care about
+		requiredGuild := "546465182344413185"
+
+		var guilds []Guild
+
+		json.Unmarshal([]byte(guildJson), &guilds)
+
+		session.Values["authenticated"] = false
+		for _, guild := range guilds {
+			if guild.Id == requiredGuild {
+				// user is authenticated
+				session.Values["authenticated"] = true
+				break
+			}
+		}
+
+		session.Save(r, w)
+
+		if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
+			w.Write([]byte("not authorized"))
+		} else {
+			// redirect to "/"
+			http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		}
 	})
 
 	log.Println("Listening on :3000")
